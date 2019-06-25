@@ -13,13 +13,13 @@ RDD是Spark Core的核心抽象，而DataFrame是Spark SQL的核心抽象。从�
 2. DataFrame支持的操作都是预定义好的高度优化过的关系型操作（如Select, Order by, Filter, Group by等等），而RDD的操作是可任意定义的functional操作。functional操作是不透明的，无法做优化。
 
 DataFrame是如何进行优化的？答案是通过Catalyst和Tungsten：
->* Catalyst Query Optimizer。Catalyst负责把Spark SQL代码编译成RDD代码。在这个过程中，由于Catalyst知道数据的schema，也了解每一种关系型操作，因此可以对计算过程进行优化。例如：对logical plan（即DAG）进行重排序，把filter尽可能往前推；对于每一行数据（即一个serialized scala object），只select, deserialize必要的column（即object的一个field），而不需要deserialize整个object再进行操作；等等
->* Tungsten Off-heap Serializer。由于DataFrame的数据类型都是预先限定好的，且数据的schema已知，因此Tungsten可以充分利用这些信息，高效的实现数据的序列化和反序列化。无论是内存占用还是时间消耗，Tungsten的序列化和反序列化都大大优于java原生的Serializer以及Kryo。此外，Tungsten是列式存储的，而数据处理中大部分情况都是基于列进行选择、聚合或排序，所以列式存储的设计可以减少IO、提高处理效率、提高数据压缩效率。最后，Tungsten支持off-heap的方式来管理内存，从而免受GC的影响。
+1. Catalyst Query Optimizer。Catalyst负责把Spark SQL代码编译成RDD代码。在这个过程中，由于Catalyst知道数据的schema，也了解每一种关系型操作，因此可以对计算过程进行优化。例如：对logical plan（即DAG）进行重排序，把filter尽可能往前推；对于每一行数据（即一个serialized scala object），只select, deserialize必要的column（即object的一个field），而不需要deserialize整个object再进行操作；等等
+2. Tungsten Off-heap Serializer。由于DataFrame的数据类型都是预先限定好的，且数据的schema已知，因此Tungsten可以充分利用这些信息，高效的实现数据的序列化和反序列化。无论是内存占用还是时间消耗，Tungsten的序列化和反序列化都大大优于java原生的Serializer以及Kryo。此外，Tungsten是列式存储的，而数据处理中大部分情况都是基于列进行选择、聚合或排序，所以列式存储的设计可以减少IO、提高处理效率、提高数据压缩效率。最后，Tungsten支持off-heap的方式来管理内存，从而免受GC的影响。
 
 DataFrame并不是免费的，它也有使用上的限制条件和代价：
->* 数据必须要有schema，如果数据本身是非结构化的（例如图片，文本），很难提取schema，那么没法用DataFrame
->* 数据必须表达成Spark SQL预定义的数据类型。否则Tungsten不会工作
->* DataFrame支持的操作不像RDD那么丰富和底层。例如RDD有丰富的API可以方便的控制partitioning，而DataFrame则没有。
+1. 数据必须要有schema，如果数据本身是非结构化的（例如图片，文本），很难提取schema，那么没法用DataFrame
+2. 数据必须表达成Spark SQL预定义的数据类型。否则Tungsten不会工作
+3. DataFrame支持的操作不像RDD那么丰富和底层。例如RDD有丰富的API可以方便的控制partitioning，而DataFrame则没有。
 
 ## 减少shuffle
 shuffle意味着网络传输，而网络传输意味着高时延。通过尽可能的减少shuffle，把时间花在计算而非网络传输，可以提高Spark应用的执行效率和速度。减少shuffle有多种方式：
@@ -44,7 +44,8 @@ Spark的job以shuffle为界划分成一个个stage，stage之间串行运行，�
 
 对于join中的数据倾斜，可以采用broadcast hash join的方式来解决。假设要对两个RDD进行join，其中一个RDD（称其为rdd1）里存在着一些高频key，那么首先找到这些高频key，然后对另一个RDD(称其为rdd2）进行filter和collect，把高频key对应的数据以HashMap的形式保存下来，并把这个hashMap作为广播变量传播到每一个executor上。接下来，rdd1通过hashMap进行过滤并分成两部分：一部分是高频key对应的数据，这部分跟hashMap通过local combine生成join结果；另一部分是正常key对应的数据，这部分可以直接跟rdd2进行join。两部分的结果union起来就是最终结果。
 
-## 用foreachPartitions代替foreach
+## 用foreachPartitions代替foreach(用mapPartitions代替map)
+foreach是对每一个record进行操作，而foreachPartitions则是对每一个partition进行操作。有些时候，采用foreachPartitions可以大幅减少不必要的对象创建，可参考Spark官方文档https://spark.apache.org/docs/latest/streaming-programming-guide.html 的"Design Patterns for using foreachRDD"这一段。
 
 ## 用flatMap代替map+filter。
 map+filter需要遍历数据两次，而flatMap可以实现同样的功能，但是只需遍历数据一次。（不过随着Spark Core的进化，map+filter这种窄依赖操作可以合并到一个stage内，也就是说只需遍历一次就能完成map+filter。即便如此， 用flatMap代码也更简洁一些）
