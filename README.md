@@ -45,7 +45,7 @@ Spark的job以shuffle为界划分成一个个stage，stage之间串行运行，�
 对于join中的数据倾斜，可以采用broadcast hash join的方式来解决。假设要对两个RDD进行join，其中一个RDD（称其为rdd1）里存在着一些高频key，那么首先找到这些高频key，然后对另一个RDD(称其为rdd2）进行filter和collect，把高频key对应的数据以HashMap的形式保存下来，并把这个hashMap作为广播变量传播到每一个executor上。接下来，rdd1通过hashMap进行过滤并分成两部分：一部分是高频key对应的数据，这部分跟hashMap通过local combine生成join结果；另一部分是正常key对应的数据，这部分可以直接跟rdd2进行join。两部分的结果union起来就是最终结果。
 
 ## 用foreachPartitions代替foreach(用mapPartitions代替map)
-foreach是对每一个record进行操作，而foreachPartitions则是对每一个partition进行操作。有些时候，采用foreachPartitions可以大幅减少不必要的对象创建，可参考Spark官方文档https://spark.apache.org/docs/latest/streaming-programming-guide.html 的"Design Patterns for using foreachRDD"这一段。
+foreach是对每一个record进行操作，而foreachPartitions则是对每一个partition进行操作。很多时候采用foreachPartitions会比foreach更加高效。例如Spark往数据库里写数据的时候，如果采用foreach，那么每条记录都需要新建一个数据库连接，既没必要又极大的浪费资源；采用foreachPartitions的话可以每个partition建立一个数据库连接，然后每个partition通过批量的方式高效写入。关于利用foreachPartitions写入数据库的优化，Spark官方文档https://spark.apache.org/docs/latest/streaming-programming-guide.html 的"Design Patterns for using foreachRDD"这一段写得非常好。
 
 ## 用flatMap代替map+filter。
 map+filter需要遍历数据两次，而flatMap可以实现同样的功能，但是只需遍历数据一次。（不过随着Spark Core的进化，map+filter这种窄依赖操作可以合并到一个stage内，也就是说只需遍历一次就能完成map+filter。即便如此， 用flatMap代码也更简洁一些）
