@@ -7,12 +7,14 @@ RDD是Spark Core的核心抽象，而DataFrame是Spark SQL的核心抽象。从�
 >* 更快、更省内存的序列化和反序列化方式
 >* 数据的列式存储，更高的存储效率，更少的IO
 >* 支持off-heap的内存管理，从而使应用程序免受GC造成的停顿和时延
+
 为什么DataFrame会有性能提升？因为相较RDD而言，DataFrame对数据和操作有更深入的洞察：
 >* DataFrame支持的数据类型都是预定义好的数据类型，数据以结构化形式存储，DataFrame知道数据的schema，可以对数据的存储和操作进行优化。而RDD中，数据的存储结构是不透明的，对象是不透明的、任意的，无法做假设，也无法做优化。
 >* DataFrame支持的操作都是预定义好的高度优化过的关系型操作（如Select, Order by, Filter, Group by等等），而RDD的操作是可任意定义的functional操作。functional操作是不透明的，无法做优化。
 DataFrame是如何进行优化的？答案是通过Catalyst和Tungsten：
 >* Catalyst Query Optimizer。Catalyst负责把Spark SQL代码编译成RDD代码。在这个过程中，由于Catalyst知道数据的schema，也了解每一种关系型操作，因此可以对计算过程进行优化。例如：对logical plan（即DAG）进行重排序，把filter尽可能往前推；对于每一行数据（即一个serialized scala object），只select, deserialize必要的column（即object的一个field），而不需要deserialize整个object再进行操作；等等
 >* Tungsten Off-heap Serializer。由于DataFrame的数据类型都是预先限定好的，且数据的schema已知，因此Tungsten可以充分利用这些信息，高效的实现数据的序列化和反序列化。无论是内存占用还是时间消耗，Tungsten的序列化和反序列化都大大优于java原生的Serializer以及Kryo。此外，Tungsten是列式存储的，而数据处理中大部分情况都是基于列进行选择、聚合或排序，所以列式存储的设计可以减少IO、提高处理效率、提高数据压缩效率。最后，Tungsten支持off-heap的方式来管理内存，从而免受GC的影响。
+
 DataFrame的限制或代价
 >* 数据必须要有schema，如果数据本身是非结构化的（例如图片，文本），很难提取schema，那么没法用DataFrame
 >* 数据必须表达成Spark SQL预定义的数据类型。否则Tungsten不会工作
