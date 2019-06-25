@@ -5,7 +5,7 @@ RDD是Spark Core的核心抽象，而DataFrame是Spark SQL的核心抽象。从�
 >* 支持谓词下推。对logical plan（即DAG）重排序，把过滤操作推到尽可能靠近数据源的地方，从而让下游的操作在尽可能小的数据集上进行。
 >* 处理每条数据时，不需要针对完整的scala object，而只需要针对必要的field，从而大幅减少需要反序列化以及网络传输的数据量。
 >* 更快、更省内存的序列化和反序列化方式
->* 数据的列式存储，更高的存储效率，更少的IO
+>* 数据的列式存储。更高的存储效率，更少的IO(why?)
 >* 支持off-heap的内存管理，从而使应用程序免受GC造成的停顿和时延
 
 为什么DataFrame会有性能提升？因为相较RDD而言，DataFrame对数据和操作有更深入的洞察：
@@ -28,7 +28,9 @@ shuffle意味着网络传输，而网络传输意味着高时延。通过尽可�
 3. 通过broadcast来减少shuffle。例如一大一小两个RDD进行join，那么可以先把小的RDD collect到driver上形成一个查找表，然后把这个查找表作为广播变量传播到各个executor上，然后对大的RDD进行mapPartitions，每个partition跟查找表做local combine。这样可以达到join的效果并完全避免了shuffle。这种join有个专门的名字叫“broadcast hash join”，事实上，Spark SQL支持自动进行broadcast hash join，而Spark Core则需要手动去写代码实现
 
 ## 正确使用persist（缓存）
-缓存的意义在于避免数据的重复计算。假如某一个RDD会在两个不同的action中被用到，那么把这个RDD缓存起来可以避免重复计算（即当第一个action计算的过程中得到了这个RDD的时候，这个RDD会缓存在spark的内存或磁盘上，当第二个action需要用到这个RDD的时候，可以直接读缓存，而不必重新计算）。一个需要用到缓存的场景是对RDD进行自定义partition的时候，如果重新partition之后的RDD需要重复使用，那么需要在partitionBy之后缓存起来，否则每次使用时都会导致RDD重新partition，而partition是非常昂贵的操作（因为涉及shuffle）。
+缓存的意义在于避免数据的重复计算。假如某一个RDD会在两个不同的action中被用到，那么把这个RDD缓存起来可以避免重复计算（即当第一个action计算的过程中得到了这个RDD的时候，这个RDD会缓存在spark的内存或磁盘上，当第二个action需要用到这个RDD的时候，可以直接读缓存，而不必重新计算）。
+
+一个典型场景是对RDD进行自定义partition的时候，如果重新partition之后的RDD需要重复使用，那么需要在partitionBy之后缓存起来，否则每次使用时都会导致RDD重新partition，而partition是非常昂贵的操作（因为涉及shuffle）。
 
 初学者常常犯的错误并不是在需要缓存的时候忘记缓存，而是在不需要缓存的时候却进行了缓存。他们潜意识里认为把RDD缓存起来对fault tolerance有帮助，但其实缓存并不是fault tolerance的手段，Spark Core的fault tolerance是通过DAG的lineage来实现的。不必要的缓存只是单纯的浪费了内存资源，对计算并没有任何帮助。
 
@@ -40,12 +42,12 @@ Spark的job以shuffle为界划分成一个个stage，stage之间串行运行，�
 
 数据倾斜也就是数据在不同task之间划分的不均匀。在基于key的aggregation或join操作中，如果某些key出现的次数明显多于别的key，由于同一个key的数据一定会拉取到同一个task中处理，那么这个倒霉的task就需要处理比别的task多得多的数据，从而成为整个stage的瓶颈。
 
-对于aggregation中的数据倾斜，通常的应对思路是把集中的key进行打散，通过二次聚合的方式，把高负荷task的数据分散给更多的task并行处理。以一个实际的场景为例：现在有一个用户购买记录的数据集，假设每条record包含的字段有userId、购买的产品信息、以及支付金额，我们需要统计每个用户的总消费金额。数据存在严重的倾斜，表现在大部分userId只有一两条购买记录，但是小部分高频用户有上万条记录。我们可以通过一些手段（数据量小的话可以通过reduceByKey统计每个userId出现的次数，然后sort并取最高频的N个userId，数据量大的话可以先sample）找到这些高频用户，把高频用户单独作为一个RDD特殊处理，普通用户作为另一个RDD按常规方式处理（两个RDD处理结果union起来就是最终结果）；在高频用户RDD中，每个userId加上一个取值为1~n的随机前缀，假设有一个高频userId“Alice”出现了很多次，加上随机前缀之后就会变成”1_Alice”，”2_Alice”，…,“n_Alice”，这样的话原来必须由同一个task聚合的”Alice”就可以分给多个task聚合，最后只需要把n个”*_Alice”二次聚合，就可以得到“Alice”总的聚合结果。
+对于aggregation中的数据倾斜，通常的应对思路是把集中的key进行打散，通过二次聚合的方式，把高负荷task的数据分散给更多的task并行处理。以一个实际的场景为例：现在有一个用户购买记录的数据集，假设每条record包含的字段有userId、购买的产品信息、以及支付金额，我们需要统计每个用户的总支付金额。现知数据存在严重的倾斜，表现在大部分userId只有一两条购买记录，但是小部分高频用户有上万条记录。我们可以通过一些手段（数据量小的话可以通过reduceByKey统计每个userId出现的次数，然后sort并取最高频的N个userId，数据量大的话可以先sample）找到这些高频用户，把高频用户单独作为一个RDD特殊处理，普通用户作为另一个RDD按常规方式处理（两个RDD处理结果union起来就是最终结果）；在高频用户RDD中，每个userId加上一个取值为1~n的随机前缀，假设有一个高频userId“Alice”出现了很多次，加上随机前缀之后就会变成”1_Alice”，”2_Alice”，…,“n_Alice”，这样的话原来必须由同一个task聚合的”Alice”就可以分给多个task聚合，最后只需要把n个”*_Alice”二次聚合，就可以得到“Alice”总的聚合结果。
 
 对于join中的数据倾斜，可以采用broadcast hash join的方式来解决。假设要对两个RDD进行join，其中一个RDD（称其为rdd1）里存在着一些高频key，那么首先找到这些高频key，然后对另一个RDD(称其为rdd2）进行filter和collect，把高频key对应的数据以HashMap的形式保存下来，并把这个hashMap作为广播变量传播到每一个executor上。接下来，rdd1通过hashMap进行过滤并分成两部分：一部分是高频key对应的数据，这部分跟hashMap通过local combine生成join结果；另一部分是正常key对应的数据，这部分可以直接跟rdd2进行join。两部分的结果union起来就是最终结果。
 
 ## 用foreachPartitions代替foreach(用mapPartitions代替map)
-foreach是对每一个record进行操作，而foreachPartitions则是对每一个partition进行操作。很多时候采用foreachPartitions会比foreach更加高效。例如Spark往数据库里写数据的时候，如果采用foreach，那么每条记录都需要新建一个数据库连接，既没必要又极大的浪费资源；采用foreachPartitions的话可以每个partition建立一个数据库连接，然后每个partition通过批量的方式高效写入。关于利用foreachPartitions写入数据库的优化，Spark官方文档https://spark.apache.org/docs/latest/streaming-programming-guide.html 的"Design Patterns for using foreachRDD"这一段写得非常好。
+foreach是对每一个记录进行操作，而foreachPartitions则是对每一个partition进行操作。很多时候采用foreachPartitions会比foreach更加高效。例如Spark往数据库里写数据的时候，如果采用foreach，那么每写一条记录都需要新建一个数据库连接，既没必要又极大的浪费资源；采用foreachPartitions的话可以每个partition建立一个数据库连接，然后每个partition通过批量的方式高效写入。关于利用foreachPartitions写入数据库的优化，Spark官方文档https://spark.apache.org/docs/latest/streaming-programming-guide.html 的"Design Patterns for using foreachRDD"这一段写得非常好。
 
-## 用flatMap代替map+filter。
-map+filter需要遍历数据两次，而flatMap可以实现同样的功能，但是只需遍历数据一次。（不过随着Spark Core的进化，map+filter这种窄依赖操作可以合并到一个stage内，也就是说只需遍历一次就能完成map+filter。即便如此， 用flatMap代码也更简洁一些）
+## 用mapValues代替map（flatMapValues代替flatMap）
+mapValues和flatMapValues是Pair RDD独有的算子，他们可以保持原有的key和partition不变，只对value进行操作。在某些场景中，维持原有partition可以方便下游操作并减少shuffle。对于Pair RDD而言，mapValues和flatMapValues完全可以代替map和flatMap。
