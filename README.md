@@ -2,7 +2,7 @@
 
 ## 用DataFrame替代RDD
 RDD是Spark Core的核心抽象，而DataFrame是Spark SQL的核心抽象。从性能角度，DataFrame相比RDD有巨大优势，主要体现在：
->* 支持谓词下推。对logical plan（即DAG）重排序，把过滤操作推到尽可能靠近数据源的地方，从而让下游的操作在尽可能小的数据集上进行。
+>* 支持谓词下推。对logical plan重排序，把过滤操作推到尽可能靠近数据源的地方，从而让下游的操作在尽可能小的数据集上进行。
 >* 处理每条数据时，不需要针对完整的scala object，而只需要针对必要的field，从而大幅减少需要反序列化以及网络传输的数据量。
 >* 更快、更省内存的序列化和反序列化方式
 >* 数据的列式存储。更高的存储效率，更少的IO(why?)
@@ -13,7 +13,7 @@ RDD是Spark Core的核心抽象，而DataFrame是Spark SQL的核心抽象。从�
 2. DataFrame支持的操作都是预定义好的高度优化过的关系型操作（如Select, Order by, Filter, Group by等等），而RDD的操作是可任意定义的functional操作。functional操作是不透明的，无法做优化。
 
 DataFrame是如何进行优化的？答案是通过Catalyst和Tungsten：
-1. Catalyst Query Optimizer。Catalyst负责把Spark SQL代码编译成RDD代码。在这个过程中，由于Catalyst知道数据的schema，也了解每一种关系型操作，因此可以对计算过程进行优化。例如：对logical plan（即DAG）进行重排序，把filter尽可能往前推；对于每一行数据（即一个serialized scala object），只select, deserialize必要的column（即object的一个field），而不需要deserialize整个object再进行操作；等等
+1. Catalyst Query Optimizer。Catalyst负责把Spark SQL代码编译成RDD代码。在这个过程中，由于Catalyst知道数据的schema，也了解每一种关系型操作，因此可以对计算过程进行优化。例如：对logical plan进行重排序，把filter尽可能往前推；对于每一行数据（即一个serialized scala object），只select, deserialize必要的column（即object的一个field），而不需要deserialize整个object再进行操作；Catalyst还可以跟特定数据源结合进行深度优化，例如如果Spark SQL对MongoDB上建了索引的字段进行query，那么可以利用MongoDB的in-db aggregation，只提取相关记录，避免全表扫描。
 2. Tungsten Off-heap Serializer。由于DataFrame的数据类型都是预先限定好的，且数据的schema已知，因此Tungsten可以充分利用这些信息，高效的实现数据的序列化和反序列化。无论是内存占用还是时间消耗，Tungsten的序列化和反序列化都大大优于java原生的Serializer以及Kryo。此外，Tungsten是列式存储的，而数据处理中大部分情况都是基于列进行选择、聚合或排序，所以列式存储的设计可以减少IO、提高处理效率、提高数据压缩效率。最后，Tungsten支持off-heap的方式来管理内存，从而免受GC的影响。
 
 DataFrame并不是免费的，它也有使用上的限制条件和代价：
@@ -24,8 +24,8 @@ DataFrame并不是免费的，它也有使用上的限制条件和代价：
 ## 减少shuffle
 shuffle意味着网络传输，而网络传输意味着高时延。通过尽可能的减少shuffle，把时间花在计算而非网络传输，可以提高Spark应用的执行效率和速度。减少shuffle有多种方式：
 1. 采用mapper side reduce来减少shuffle。例如用reduceByKey代替groupByKey+reduce，这样在shuffle之前先做一轮reduce，可以大幅减少需要shuffle的数据量；
-2. 通过Pre-partition来减少shuffle。例如一种情况，假设需要周期性的对两个RDD进行join，其中一个RDD是静态的、不随时间变化的（例如用户注册信息），另一个RDD是动态的、时变的（例如用户在某个时间段内的活动），那么在join之前先对静态RDD进行pre-partition，这样每次join时，静态RDD的partitioner已知，只有时变RDD会发生shuffle。
-3. 通过broadcast来减少shuffle。例如一大一小两个RDD进行join，那么可以先把小的RDD collect到driver上形成一个查找表，然后把这个查找表作为广播变量传播到各个executor上，然后对大的RDD进行mapPartitions，每个partition跟查找表做local combine。这样可以达到join的效果并完全避免了shuffle。这种join有个专门的名字叫“broadcast hash join”，事实上，Spark SQL支持自动进行broadcast hash join，而Spark Core则需要手动去写代码实现
+2. 通过Pre-partition来减少shuffle。例如一种情况，假设需要周期性的对两个RDD进行join，其中一个RDD是静态的、不随时间变化的（例如用户注册信息），另一个RDD是动态的、时变的（例如用户在某个时间段内的活动），那么在join之前先对静态RDD进行pre-partition，这样每次join时，静态RDD的partitioner已知，只有时变RDD会发生shuffle(why?)。
+3. 通过broadcast来减少shuffle。例如一大一小两个RDD进行join，那么可以先把小的RDD collect到driver上形成一个查找表，然后把这个查找表作为广播变量传播到各个executor上，然后对大的RDD进行mapPartitions，每个partition跟查找表做local combine。这样可以达到join的效果并完全避免了shuffle。这种join有个专门的名字叫“broadcast hash join”，事实上，Spark SQL支持自动进行broadcast hash join(可参考Dataset.scala的hint方法)，而Spark Core则需要手动去写代码实现
 
 ## 正确使用persist（缓存）
 Spark提供了两种手段来reuse RDD/Dataframe，分别是persist和checkpoint。
