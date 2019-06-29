@@ -23,7 +23,7 @@ DataFrame并不是免费的，它也有使用上的限制条件和代价：
 
 ## 减少shuffle
 shuffle意味着网络传输，而网络传输意味着高时延。通过尽可能的减少shuffle，把时间花在计算而非网络传输，可以提高Spark应用的执行效率和速度。减少shuffle有多种方式：
-1. 采用mapper side reduce来减少shuffle。例如用reduceByKey代替groupByKey+reduce，这样在shuffle之前先做一轮reduce，可以大幅减少需要shuffle的数据量；
+1. 采用mapper side reduce来减少shuffle。例如对Pair RDD用reduceByKey代替groupByKey+reduce，这样在shuffle之前先做一轮reduce，可以大幅减少需要shuffle的数据量；当然，如果是DataFrame的话就可以直接用groupBy，因为query optimizer会默认帮你做优化；
 2. 通过Pre-partition来减少shuffle。例如一种情况，假设需要周期性的对两个RDD进行join，其中一个RDD是静态的、不随时间变化的（例如用户注册信息），另一个RDD是动态的、时变的（例如用户在某个时间段内的活动），那么在join之前先对静态RDD进行pre-partition，这样每次join时，静态RDD的partitioner已知，只有时变RDD会发生shuffle(why?)。
 3. 通过broadcast来减少shuffle。例如一大一小两个RDD进行join，那么可以先把小的RDD collect到driver上形成一个查找表，然后把这个查找表作为广播变量传播到各个executor上，然后对大的RDD进行mapPartitions，每个partition跟查找表做local combine。这样可以达到join的效果并完全避免了shuffle。这种join有个专门的名字叫“broadcast hash join”，事实上，Spark SQL支持自动进行broadcast hash join(可参考Dataset.scala的hint方法)，而Spark Core则需要手动去写代码实现
 
